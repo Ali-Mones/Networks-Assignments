@@ -12,15 +12,52 @@ using namespace std;
 
 #define BUFFER_SIZE 1024
 
-char* openFile(const char* filePath)
-{
-    char* buffer = (char*)malloc(BUFFER_SIZE);
-    ifstream file(filePath);
-    cout << filesystem::is_regular_file(filePath) << endl;
-    file.read(buffer, BUFFER_SIZE);
-    file.close();
+const static string textHTMLType = "text/html; charset=utf-8";
+const static string blobType = "image/jpeg";
 
-    return buffer;
+string readBuffer(const string& filePath)
+{
+    if (!filesystem::is_regular_file(filePath))
+        return "";
+
+    ifstream file(filePath);
+    stringstream buffer;
+    buffer << file.rdbuf();
+
+    cout << buffer.str() << endl;
+
+    return buffer.str();
+}
+
+void writeBuffer(const string& filePath, const string& buffer)
+{
+    ofstream file(filePath);
+    file << buffer;
+}
+
+void sendNotFound404(int clientSocket)
+{
+    string response = "";
+    response += "HTTP/1.1 404 Not Found\r\n";
+    response += "Content-Length: 0\r\n";
+    response += "\r\n";
+
+    if (send(clientSocket, response.c_str(), response.size(), 0) == -1)
+        perror("Failed to send 404 Not Found response to client!");
+}
+
+void sendGetOK(int socket, const string& responseBody, const string& contentType)
+{
+    string response;
+    response += "HTTP/1.1 200 OK\r\n";
+    response += "Connection: Keep-Alive\r\n";
+    response += "Content-Type: " + contentType + "\r\n";
+    response += "Content-Length: " + to_string(responseBody.size()) + "\r\n";
+    response += "\r\n";
+    response += responseBody;
+
+    if (send(socket, response.c_str(), response.size(), 0) == -1)
+        perror("Failed to send 200 OK response to client!");
 }
 
 void* respond(void* arg)
@@ -28,48 +65,52 @@ void* respond(void* arg)
     int clientSocket = *(int*)&arg;
     while (true)
     {
+        string requestString;
+        int bytesRead;
         uint8_t request[BUFFER_SIZE];
-        memset(request, 0, BUFFER_SIZE);
-        int bytesRead = recv(clientSocket, request, BUFFER_SIZE, 0);
-
-        if (bytesRead < 0)
+        do
         {
-            cerr << "Couldn't receive request from client!" << endl;
-            break;
-        }
+            memset(request, 0, BUFFER_SIZE);
+            bytesRead = recv(clientSocket, request, BUFFER_SIZE, 0);
+            cout << request << endl;
+            if (bytesRead < 0)
+            {
+                perror("Couldn't receive request from client!");
+                break;
+            }
 
-        if (bytesRead == 0)
-            break;
+            if (bytesRead == 0)
+                break;
 
-        cout << request << endl;
+            requestString.insert(requestString.end(), &request[0], &request[BUFFER_SIZE]);
+        } while (bytesRead == BUFFER_SIZE);
 
-        char* responseBody = openFile("hello.txt");
-        char* responseHeaders = "HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n";
+        filesystem::path path = "index.html";
+        string extension = path.extension();
+        cout << extension << endl;
 
-        char* response = (char*)malloc(20 * BUFFER_SIZE * BUFFER_SIZE);
-        strcat(response, responseHeaders);
-        strcat(response, responseBody);
-        int responseLen = strlen(response);
+        string responseBody = readBuffer(path);
 
-        int bytesSent = send(clientSocket, response, responseLen, 0);
-        free(responseBody);
-        if (bytesSent <= 0)
-            cerr << "Failed to send response to client!";
+        if (responseBody.size() == 0)
+            sendNotFound404(clientSocket);
+        else
+            sendGetOK(clientSocket, responseBody, textHTMLType);
     }
 
     cout << "Client disconnected!" << endl;
 
     close(clientSocket);
 
-    return NULL;
+    return nullptr;
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    int portNumber = atoi(argv[1]);
     int serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (serverSocket == -1)
     {
-        cerr << "Failed to create socket!" << endl;
+        perror("Failed to create socket!");
         exit(1);
     }
 
@@ -77,17 +118,17 @@ int main()
     int optval = 1;
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(int)) < 0)
     {
-        cerr << "setsockopt(SO_REUSEADDR) failed!" << endl;
+        perror("setsockopt(SO_REUSEADDR) failed!");
         exit(1);
     }
 
     sockaddr_in serverAddress = {0};
     serverAddress.sin_addr.s_addr = INADDR_ANY;
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(8080);
+    serverAddress.sin_port = htons(portNumber);
     if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1)
     {
-        cerr << "Failed to bind server!" << endl;
+        perror("Failed to bind server!");
         close(serverSocket);
         exit(1);
     }
@@ -96,7 +137,7 @@ int main()
 
     if (listen(serverSocket, 5) == -1)
     {
-        cerr << "Failed to listen on socket!" << endl;
+        perror("Failed to listen on socket!");
         close(serverSocket);
         exit(1);
     }
@@ -110,7 +151,7 @@ int main()
         int clientSocket = accept(serverSocket, (sockaddr*)&clientAddress, &clientAddressLen);
         if (clientSocket == -1)
         {
-            cerr << "Failed to accept request!" << endl;
+            perror("Failed to accept request!");
             exit(1);
         }
 
