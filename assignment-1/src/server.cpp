@@ -9,11 +9,28 @@
 #include <string>
 #include <filesystem>
 using namespace std;
+using filesystem::path;
 
 #define BUFFER_SIZE 1024
 
 const static string textHTMLType = "text/html; charset=utf-8";
 const static string blobType = "image/jpeg";
+
+pair<string,string> parseRequest(string request)
+{
+    int firstSpacePos = request.find(" ");
+    int secondSpacePos = request.find(" ",firstSpacePos+1);
+
+    string URL = request.substr(firstSpacePos+2,secondSpacePos-firstSpacePos-2);
+
+    int bodyPos = request.find_last_of("\n") + 1;
+
+    int first0Pos = request.find('\0');
+    string body = request.substr(bodyPos,first0Pos-bodyPos);
+
+    return {URL,body};
+}
+
 
 string readBuffer(const string& filePath)
 {
@@ -79,24 +96,42 @@ void* respond(void* arg)
                 break;
             }
 
-            if (bytesRead == 0)
-                break;
+            if (bytesRead == 0){
+                cout << "Client disconnected!" << endl;
+                close(clientSocket);
+                return nullptr;
+            }
 
             requestString.insert(requestString.end(), &request[0], &request[BUFFER_SIZE]);
         } while (bytesRead == BUFFER_SIZE);
 
-        filesystem::path path = "index.html";
-        string extension = path.extension();
-        cout << extension << endl;
+        auto [url,body] = parseRequest(requestString);
 
-        string responseBody = readBuffer(path);
-
-        if (responseBody.size() == 0)
-            sendNotFound404(clientSocket);
-        else
-            sendGetOK(clientSocket, responseBody, textHTMLType);
+        
+        if(requestString.find("GET") == 0)
+        {
+            string reqFile = readBuffer(url);
+            if (reqFile.size() == 0)
+            {
+                sendNotFound404(clientSocket);
+            }
+            else
+            {
+                string extension = path(url).extension();
+                if(extension == ".txt" || extension == ".html")
+                    sendGetOK(clientSocket, reqFile, textHTMLType);
+                else
+                    sendGetOK(clientSocket, reqFile, blobType);
+            }
+        }
+        else 
+        {
+            writeBuffer(url,body);
+            sendGetOK(clientSocket,"",textHTMLType);
+        }
+        
     }
-
+    
     cout << "Client disconnected!" << endl;
 
     close(clientSocket);
@@ -106,7 +141,7 @@ void* respond(void* arg)
 
 int main(int argc, char** argv)
 {
-    int portNumber = atoi(argv[1]);
+    //int portNumber = atoi(argv[1]);
     int serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (serverSocket == -1)
     {
@@ -125,7 +160,7 @@ int main(int argc, char** argv)
     sockaddr_in serverAddress = {0};
     serverAddress.sin_addr.s_addr = INADDR_ANY;
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(portNumber);
+    serverAddress.sin_port = htons(8080);
     if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1)
     {
         perror("Failed to bind server!");

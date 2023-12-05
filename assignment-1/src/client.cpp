@@ -36,7 +36,8 @@ int main()
     }
 
     string url = "/hello.txt";
-    string getRequest = "GET " + url + " HTTP/1.1\r\n\r\n";
+    string getRequest = "POST " + url + " HTTP/1.1\r\n\r\nfake youu";
+
     int bytesSent = send(sock, getRequest.c_str(), getRequest.size(), 0);
     if (bytesSent == -1 || bytesSent != getRequest.size())
         cerr << "Sending to server failed!" << endl;
