@@ -8,12 +8,20 @@
 #include <fstream>
 #include <string>
 #include <filesystem>
+#include <chrono>
 using namespace std;
 
 #define BUFFER_SIZE 1024
 
 const static string textHTMLType = "text/html; charset=utf-8";
 const static string blobType = "image/jpeg";
+
+struct ConnectionInstance
+{
+    pthread_t tid;
+    int socket;
+    std::chrono::time_point<chrono::system_clock> lastUpdate;
+};
 
 string readBuffer(const string& filePath)
 {
@@ -37,32 +45,56 @@ void writeBuffer(const string& filePath, const string& buffer)
 
 void sendNotFound404(int clientSocket)
 {
-    string response = "";
-    response += "HTTP/1.1 404 Not Found\r\n";
-    response += "Content-Length: 0\r\n";
-    response += "\r\n";
+    string notFoundResponse = "";
+    notFoundResponse += "HTTP/1.1 404 Not Found\r\n";
+    notFoundResponse += "Content-Length: 0\r\n";
+    notFoundResponse += "\r\n";
 
-    if (send(clientSocket, response.c_str(), response.size(), 0) == -1)
+    if (send(clientSocket, notFoundResponse.c_str(), notFoundResponse.size(), 0) == -1)
         perror("Failed to send 404 Not Found response to client!");
 }
 
 void sendGetOK(int socket, const string& responseBody, const string& contentType)
 {
-    string response;
-    response += "HTTP/1.1 200 OK\r\n";
-    response += "Connection: Keep-Alive\r\n";
-    response += "Content-Type: " + contentType + "\r\n";
-    response += "Content-Length: " + to_string(responseBody.size()) + "\r\n";
-    response += "\r\n";
-    response += responseBody;
+    string okResponse;
+    okResponse += "HTTP/1.1 200 OK\r\n";
+    okResponse += "Connection: Keep-Alive\r\n";
+    okResponse += "Content-Type: " + contentType + "\r\n";
+    okResponse += "Content-Length: " + to_string(responseBody.size()) + "\r\n";
+    okResponse += "\r\n";
+    okResponse += responseBody;
 
-    if (send(socket, response.c_str(), response.size(), 0) == -1)
+    if (send(socket, okResponse.c_str(), okResponse.size(), 0) == -1)
         perror("Failed to send 200 OK response to client!");
 }
 
-void* respond(void* arg)
+void* handleTimeout(void* arg)
 {
-    int clientSocket = *(int*)&arg;
+    vector<ConnectionInstance*>* connections = (vector<ConnectionInstance*>*)arg;
+    chrono::seconds timeout = std::chrono::seconds(30);
+
+    while (true)
+    {
+        chrono::time_point now = chrono::system_clock::now();
+        for (ConnectionInstance*& connection : *connections)
+        {
+            int index = &connection - &(*connections)[0];
+            chrono::seconds timeDifference = chrono::duration_cast<std::chrono::seconds>(now - connection->lastUpdate);
+            if (timeDifference > timeout)
+            {
+                cout << "Client timed out!" << endl;
+                pthread_cancel(connection->tid);
+                connections->erase(index + connections->begin());
+                close(connection->socket);
+            }
+        }
+    }
+}
+
+void* handleRequest(void* arg)
+{
+    ConnectionInstance* connection = (ConnectionInstance*)arg;
+
     while (true)
     {
         string requestString;
@@ -71,8 +103,11 @@ void* respond(void* arg)
         do
         {
             memset(request, 0, BUFFER_SIZE);
-            bytesRead = recv(clientSocket, request, BUFFER_SIZE, 0);
+            bytesRead = recv(connection->socket, request, BUFFER_SIZE, 0);
+            connection->lastUpdate = chrono::system_clock::now();
+
             cout << request << endl;
+
             if (bytesRead < 0)
             {
                 perror("Couldn't receive request from client!");
@@ -85,27 +120,31 @@ void* respond(void* arg)
             requestString.insert(requestString.end(), &request[0], &request[BUFFER_SIZE]);
         } while (bytesRead == BUFFER_SIZE);
 
-        filesystem::path path = "index.html";
-        string extension = path.extension();
-        cout << extension << endl;
+        filesystem::path path = "hello.txt";
 
         string responseBody = readBuffer(path);
 
         if (responseBody.size() == 0)
-            sendNotFound404(clientSocket);
+            sendNotFound404(connection->socket);
         else
-            sendGetOK(clientSocket, responseBody, textHTMLType);
+            sendGetOK(connection->socket, responseBody, textHTMLType);
     }
 
     cout << "Client disconnected!" << endl;
 
-    close(clientSocket);
+    close(connection->socket);
 
     return nullptr;
 }
 
 int main(int argc, char** argv)
 {
+    if (argc < 2)
+    {
+        cerr << "A port number must be provided!" << endl;
+        exit(1);
+    }
+
     int portNumber = atoi(argv[1]);
     int serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (serverSocket == -1)
@@ -133,7 +172,7 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    cout << "Server listening on port: 8080" << endl;
+    cout << "Server listening on port: " << portNumber << endl;
 
     if (listen(serverSocket, 5) == -1)
     {
@@ -142,7 +181,10 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    vector<pthread_t> threads;
+    vector<ConnectionInstance*> connections;
+    pthread_t timeoutThread;
+    pthread_create(&timeoutThread, NULL, &handleTimeout, &connections);
+
     while (true)
     {
         sockaddr_in clientAddress = {0};
@@ -157,8 +199,13 @@ int main(int argc, char** argv)
 
         cout << "Client connected!" << endl;
 
-        pthread_t thread = {0};
-        threads.push_back(thread);
-        pthread_create(&threads[threads.size() - 1], NULL, &respond, (void*)clientSocket);
+        pthread_t thread;
+        ConnectionInstance connectionInstance;
+        connectionInstance.tid = thread;
+        connectionInstance.lastUpdate = chrono::system_clock::now();
+        connectionInstance.socket = clientSocket;
+
+        connections.push_back(&connectionInstance);
+        pthread_create(&connectionInstance.tid, NULL, &handleRequest, &connectionInstance);
     }
 }
