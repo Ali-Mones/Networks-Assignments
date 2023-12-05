@@ -26,20 +26,6 @@ struct ConnectionInstance
 vector<ConnectionInstance*> connections;
 pthread_mutex_t connectionsMutex;
 
-void parseRequest(const string& request, string* method, string* url, string* body)
-{
-    stringstream ss(request);
-    ss >> *method >> *url;
-    *url = url->substr(1);
-
-    int bodyStart = request.find("\r\n\r\n") + 4;
-    int bodyEnd = request.find('\0');
-
-    *body = request.substr(bodyStart, bodyEnd - bodyStart);
-    if (url->ends_with(".png") || url->ends_with(".jpeg") || url->ends_with(".jpg"))
-        *body = request.substr(bodyStart);
-}
-
 string getContentType(const string& url)
 {
     const static string textHTMLType = "text/html; charset=utf-8";
@@ -53,6 +39,20 @@ string getContentType(const string& url)
 
     cerr << "(ERROR) Unsupported extension of type " << path.extension() << endl;
     exit(1);
+}
+
+void parseRequest(const string& request, string* method, string* url, string* body)
+{
+    stringstream ss(request);
+    ss >> *method >> *url;
+    *url = url->substr(1);
+
+    int bodyStart = request.find("\r\n\r\n") + 4;
+    int bodyEnd = request.find('\0');
+
+    *body = request.substr(bodyStart, bodyEnd - bodyStart);
+    if (getContentType(*url) == "image/jpeg")
+        *body = request.substr(bodyStart);
 }
 
 void sendNotFound404(int clientSocket)
