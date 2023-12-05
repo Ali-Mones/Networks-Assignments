@@ -35,6 +35,8 @@ void parseRequest(const string& request, string* method, string* url, string* bo
     int bodyEnd = request.find('\0');
 
     *body = request.substr(bodyStart, bodyEnd - bodyStart);
+    if (url->ends_with(".png") || url->ends_with(".jpeg") || url->ends_with(".jpg"))
+        *body = request.substr(bodyStart);
 }
 
 string getContentType(const string& url)
@@ -162,7 +164,7 @@ int main(int argc, char** argv)
         cerr << "A port number must be provided!" << endl;
         exit(1);
     }
-    
+
     int portNumber = atoi(argv[1]);
 
     int serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
