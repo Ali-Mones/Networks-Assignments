@@ -15,8 +15,6 @@ using namespace std;
 
 #define BUFFER_SIZE 1024
 
-const static string textHTMLType = "text/html; charset=utf-8";
-const static string imageType = "image/jpeg";
 
 struct ConnectionInstance
 {
@@ -24,6 +22,9 @@ struct ConnectionInstance
     int socket;
     std::chrono::time_point<chrono::system_clock> lastUpdate;
 };
+
+vector<ConnectionInstance*> connections;
+pthread_mutex_t connectionsMutex;
 
 void parseRequest(const string& request, string* method, string* url, string* body)
 {
@@ -81,24 +82,31 @@ void sendOK200(int socket, const string& responseBody, const string& contentType
 
 void* handleTimeout(void* arg)
 {
-    vector<ConnectionInstance*>* connections = (vector<ConnectionInstance*>*)arg;
     chrono::seconds timeout = std::chrono::seconds(30);
 
     while (true)
     {
         chrono::time_point now = chrono::system_clock::now();
-        for (ConnectionInstance*& connection : *connections)
+
+        pthread_mutex_lock(&connectionsMutex);
+        for (ConnectionInstance*& connection : connections)
         {
-            int index = &connection - &(*connections)[0];
+            int index = &connection - &(connections[0]);
             chrono::seconds timeDifference = chrono::duration_cast<std::chrono::seconds>(now - connection->lastUpdate);
-            if (timeDifference > timeout)
+            if (connection->tid == -1)
+            {
+                cout << "Deleted connection!" << endl;
+                connections.erase(index + connections.begin());
+            }
+            else if (timeDifference > timeout)
             {
                 cout << "Client timed out!" << endl;
                 pthread_cancel(connection->tid);
-                connections->erase(index + connections->begin());
+                connections.erase(index + connections.begin());
                 close(connection->socket);
             }
         }
+        pthread_mutex_unlock(&connectionsMutex);
     }
 }
 
@@ -115,7 +123,10 @@ void* handleRequest(void* arg)
         {
             memset(requestBuffer, 0, BUFFER_SIZE);
             bytesRead = recv(connection->socket, requestBuffer, BUFFER_SIZE, 0);
+
+            pthread_mutex_lock(&connectionsMutex);
             connection->lastUpdate = chrono::system_clock::now();
+            pthread_mutex_unlock(&connectionsMutex);
 
             if (bytesRead < 0)
             {
@@ -125,7 +136,12 @@ void* handleRequest(void* arg)
             if (bytesRead == 0)
             {
                 cout << "Client disconnected!" << endl;
+
+                pthread_mutex_lock(&connectionsMutex);
+                connection->tid = -1;
                 close(connection->socket);
+                pthread_mutex_unlock(&connectionsMutex);
+
                 return nullptr;
             }
 
@@ -202,7 +218,8 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    vector<ConnectionInstance*> connections;
+    pthread_mutex_init(&connectionsMutex, NULL);
+
     pthread_t timeoutThread;
     pthread_create(&timeoutThread, NULL, &handleTimeout, &connections);
 
@@ -226,7 +243,10 @@ int main(int argc, char** argv)
         connectionInstance.lastUpdate = chrono::system_clock::now();
         connectionInstance.socket = clientSocket;
 
+        pthread_mutex_lock(&connectionsMutex);
         connections.push_back(&connectionInstance);
+        pthread_mutex_unlock(&connectionsMutex);
+
         pthread_create(&connectionInstance.tid, NULL, &handleRequest, &connectionInstance);
     }
 }
