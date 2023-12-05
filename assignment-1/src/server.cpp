@@ -9,12 +9,14 @@
 #include <string>
 #include <filesystem>
 #include <chrono>
+
+#include "fileHandling.h"
 using namespace std;
 
 #define BUFFER_SIZE 1024
 
 const static string textHTMLType = "text/html; charset=utf-8";
-const static string blobType = "image/jpeg";
+const static string imageType = "image/jpeg";
 
 struct ConnectionInstance
 {
@@ -23,24 +25,31 @@ struct ConnectionInstance
     std::chrono::time_point<chrono::system_clock> lastUpdate;
 };
 
-string readBuffer(const string& filePath)
+void parseRequest(const string& request, string* method, string* url, string* body)
 {
-    if (!filesystem::is_regular_file(filePath))
-        return "";
+    stringstream ss(request);
+    ss >> *method >> *url;
+    *url = url->substr(1);
 
-    ifstream file(filePath);
-    stringstream buffer;
-    buffer << file.rdbuf();
+    int bodyStart = request.find("\r\n\r\n") + 4;
+    int bodyEnd = request.find('\0');
 
-    cout << buffer.str() << endl;
-
-    return buffer.str();
+    *body = request.substr(bodyStart, bodyEnd - bodyStart);
 }
 
-void writeBuffer(const string& filePath, const string& buffer)
+string getContentType(const string& url)
 {
-    ofstream file(filePath);
-    file << buffer;
+    const static string textHTMLType = "text/html; charset=utf-8";
+    const static string imageType = "image/jpeg";
+
+    filesystem::path path = url;
+    if (path.extension() == ".txt" || path.extension() == ".html")
+        return textHTMLType;
+    else if (path.extension() == ".png" || path.extension() == ".jpg" || path.extension() == ".jpeg")
+        return imageType;
+
+    cerr << "(ERROR) Unsupported extension of type " << path.extension() << endl;
+    exit(1);
 }
 
 void sendNotFound404(int clientSocket)
@@ -54,11 +63,11 @@ void sendNotFound404(int clientSocket)
         perror("Failed to send 404 Not Found response to client!");
 }
 
-void sendGetOK(int socket, const string& responseBody, const string& contentType)
+void sendOK200(int socket, const string& responseBody, const string& contentType)
 {
     string okResponse;
     okResponse += "HTTP/1.1 200 OK\r\n";
-    okResponse += "Connection: Keep-Alive\r\n";
+    okResponse += "Connection: keep-alive\r\n";
     okResponse += "Content-Type: " + contentType + "\r\n";
     okResponse += "Content-Length: " + to_string(responseBody.size()) + "\r\n";
     okResponse += "\r\n";
@@ -97,43 +106,52 @@ void* handleRequest(void* arg)
 
     while (true)
     {
-        string requestString;
+        string request;
         int bytesRead;
-        uint8_t request[BUFFER_SIZE];
+        uint8_t requestBuffer[BUFFER_SIZE];
         do
         {
-            memset(request, 0, BUFFER_SIZE);
-            bytesRead = recv(connection->socket, request, BUFFER_SIZE, 0);
+            memset(requestBuffer, 0, BUFFER_SIZE);
+            bytesRead = recv(connection->socket, requestBuffer, BUFFER_SIZE, 0);
             connection->lastUpdate = chrono::system_clock::now();
-
-            cout << request << endl;
 
             if (bytesRead < 0)
             {
                 perror("Couldn't receive request from client!");
-                break;
             }
 
             if (bytesRead == 0)
-                break;
+            {
+                cout << "Client disconnected!" << endl;
+                close(connection->socket);
+                return nullptr;
+            }
 
-            requestString.insert(requestString.end(), &request[0], &request[BUFFER_SIZE]);
+            request.insert(request.end(), &requestBuffer[0], &requestBuffer[BUFFER_SIZE]);
         } while (bytesRead == BUFFER_SIZE);
 
-        filesystem::path path = "hello.txt";
+        cout << request << endl;
 
-        string responseBody = readBuffer(path);
+        string method, url, body;
+        parseRequest(request, &method, &url, &body);
 
-        if (responseBody.size() == 0)
-            sendNotFound404(connection->socket);
-        else
-            sendGetOK(connection->socket, responseBody, textHTMLType);
+        if (method == "GET")
+        {
+            string responseBody = readBuffer("server/" + url);
+            if (responseBody.size() == 0)
+                sendNotFound404(connection->socket);
+            else
+                sendOK200(connection->socket, responseBody, getContentType(url));
+        }
+        else if (method == "POST")
+        {
+            writeBuffer("server/" + url, body);
+            sendOK200(connection->socket, "", "text/html");
+        }
     }
 
     cout << "Client disconnected!" << endl;
-
     close(connection->socket);
-
     return nullptr;
 }
 
@@ -144,8 +162,9 @@ int main(int argc, char** argv)
         cerr << "A port number must be provided!" << endl;
         exit(1);
     }
-
+    
     int portNumber = atoi(argv[1]);
+
     int serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (serverSocket == -1)
     {
