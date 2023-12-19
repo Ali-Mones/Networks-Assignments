@@ -4,12 +4,15 @@
 #include <cstring>
 #include <unistd.h>
 #include "Client.h"
+#include "Packets.h"
+
+using namespace std;
 
 Client::Client(const char* serverAddress, int serverPortNumber)
 {
     m_Socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (m_Socket < 0) {
-        std::cerr << "Failed to create socket" << std::endl;
+        cerr << "Failed to create socket" << endl;
         exit(1);
     }
 
@@ -23,10 +26,10 @@ Client::~Client()
     close(m_Socket);
 }
 
-void Client::RequestFile(std::string filepath)
+void Client::RequestFile(string filepath)
 {
     if (sendto(m_Socket, filepath.c_str(), filepath.size(), 0, (struct sockaddr*)&m_WelcomingServerAddress, sizeof(m_WelcomingServerAddress)) < 0) {
-        std::cerr << "Failed to send data to server" << std::endl;
+        cerr << "Failed to send data to server" << endl;
         exit(1);
     }
 }
@@ -34,11 +37,19 @@ void Client::RequestFile(std::string filepath)
 void Client::ReceiveFile()
 {
     socklen_t reliableServerAddressLen = sizeof(m_ReliableServerAddress);
-    // while (true)
-    // {
-        uint8_t buffer[512];
-        memset(buffer, 0, sizeof(buffer));
-        recvfrom(m_Socket, buffer, sizeof(buffer), 0, (sockaddr*)&m_ReliableServerAddress, &reliableServerAddressLen);
-        printf("%s\n", buffer);
-    // }
+
+    while (true)
+    {
+        Packet p;
+        recvfrom(m_Socket, &p, sizeof(p), 0, (sockaddr*)&m_ReliableServerAddress, &reliableServerAddressLen);
+
+        if (p.len == 0)
+            break;
+
+        cout << p.data << endl;
+        cout << p.len << endl;
+
+        AckPacket ack;
+        sendto(m_Socket, &ack, sizeof(ack), 0, (sockaddr*)&m_ReliableServerAddress, reliableServerAddressLen);
+    }
 }

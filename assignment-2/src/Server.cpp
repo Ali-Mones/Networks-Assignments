@@ -2,6 +2,9 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <cstring>
+#include <fstream>
+#include <cmath>
 
 #include "Packets.h"
 #include "Server.h"
@@ -26,7 +29,7 @@ Server::Server(int welcoming_port)
 
     if (bind(m_WelcomingSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) == -1)
     {
-        perror("Server Binding Failed");
+        perror("Server binding failed");
         exit(1);
     }
 
@@ -45,15 +48,16 @@ void Server::Run()
         struct sockaddr_in clientAddress;
         socklen_t clientAddressLen = sizeof(clientAddress);
 
-        uint8_t buffer[512];
-        int bytesRead = recvfrom(m_WelcomingSocket, buffer, sizeof buffer, 0, (sockaddr*)&clientAddress, &clientAddressLen);
+        uint8_t buffer[128];
+        memset(buffer, 0, sizeof(buffer));
+        int bytesRead = recvfrom(m_WelcomingSocket, buffer, sizeof(buffer), 0, (sockaddr*)&clientAddress, &clientAddressLen);
 
         if (bytesRead == -1)
         {
-            perror("Receive From Failed!");
+            perror("recvfrom failed!");
             exit(1);
         }
-
+        
         pid_t childPid = fork();
 
         if (childPid == -1)
@@ -64,8 +68,9 @@ void Server::Run()
         else if (childPid == 0)
         {
             // child process here
-            CreateNewSocket(clientAddress);
-            cout << "Child Exiting" << endl;
+            string filepath = (char*)(&buffer);
+            HandleRequest(clientAddress, filepath);
+            cout << "Child exiting" << endl;
             exit(0);
         }
         else
@@ -76,7 +81,6 @@ void Server::Run()
             {
                 if (m_WaitingThread)
                 {
-                    cout << "joining thread!" << endl;
                     m_WaitingThread->join();
                     delete m_WaitingThread;
                 }
@@ -92,17 +96,41 @@ void Server::Run()
 void Server::AwaitChildren()
 {
     while (wait(NULL) > 0);
-    cout << "All children Exited!" << endl;
+    cout << "All children exited!" << endl;
     m_WaitingMutex.lock();
     m_Waiting = false;
     m_WaitingMutex.unlock();
 }
 
-void Server::CreateNewSocket(sockaddr_in clientAddress)
+void Server::HandleRequest(sockaddr_in clientAddress, string filepath)
 {
     socklen_t clientAddressLen = sizeof(clientAddress);
     int reliableSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    string msg = "Hello from server!";
-    sendto(reliableSocket, msg.c_str(), msg.size(), 0, (sockaddr*)&clientAddress, clientAddressLen);
+
+    ifstream file("files/" + filepath, ios::ate);
+    size_t fileSize = file.tellg();
+    file.seekg(0);
+
+    int packetCount = ceil(fileSize / (float)sizeof(Packet::data));
+
+    while (packetCount--)
+    {
+        int remainingSize = fileSize - file.tellg();
+        cout << remainingSize << endl;
+
+        Packet p;
+        p.len = min(remainingSize, (int)sizeof(p.data));
+
+        file.read((char*)&p.data, p.len);
+
+        sendto(reliableSocket, &p, sizeof(p), 0, (sockaddr*)&clientAddress, clientAddressLen);
+
+        AckPacket ack;
+        recvfrom(reliableSocket, &ack, sizeof(ack), 0, (sockaddr*)&clientAddress, &clientAddressLen);
+    }
+
+    Packet endPacket;
+    sendto(reliableSocket, &endPacket, sizeof(endPacket), 0, (sockaddr*)&clientAddress, clientAddressLen);
+
     close(reliableSocket);
 }

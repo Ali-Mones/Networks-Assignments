@@ -1,6 +1,7 @@
 #include <netinet/in.h>
 #include <thread>
 #include <mutex>
+#include <string>
 
 class Server
 {
@@ -10,7 +11,7 @@ public:
     void Run();
 private:
     void AwaitChildren();
-    void CreateNewSocket(sockaddr_in clientAddress);
+    void HandleRequest(sockaddr_in clientAddress, std::string filepath);
 private:
     int m_WelcomingSocket;
     bool m_Waiting;
