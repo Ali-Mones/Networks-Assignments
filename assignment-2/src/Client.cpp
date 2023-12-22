@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <unistd.h>
+#include <chrono>
 #include "Client.h"
 #include "Packets.h"
 
@@ -38,18 +39,33 @@ void Client::ReceiveFile()
 {
     socklen_t reliableServerAddressLen = sizeof(m_ReliableServerAddress);
 
+    int ackno = 1;
+
+    chrono::time_point timer = chrono::system_clock::now();
+
     while (true)
     {
         Packet p;
         recvfrom(m_Socket, &p, sizeof(p), 0, (sockaddr*)&m_ReliableServerAddress, &reliableServerAddressLen);
+        // ackno++;
 
-        if (p.len == 0)
+        if (p.len == -1)
             break;
 
-        cout << p.data << endl;
-        cout << p.len << endl;
+        if (p.len != 0)
+        {
+            cout << p.data << endl;
+            cout << p.len << endl;
+        }
 
-        AckPacket ack;
-        sendto(m_Socket, &ack, sizeof(ack), 0, (sockaddr*)&m_ReliableServerAddress, reliableServerAddressLen);
+        chrono::time_point now = chrono::system_clock::now();
+        if (chrono::duration_cast<chrono::seconds>(now - timer) > chrono::seconds(6))
+        {
+            timer = now;
+            ackno++;
+            AckPacket ack;
+            ack.ackno = ackno;
+            sendto(m_Socket, &ack, sizeof(ack), 0, (sockaddr*)&m_ReliableServerAddress, reliableServerAddressLen);
+        }
     }
 }

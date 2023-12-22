@@ -5,6 +5,8 @@
 #include <cstring>
 #include <fstream>
 #include <cmath>
+#include <chrono>
+#include <deque>
 
 #include "Packets.h"
 #include "Server.h"
@@ -14,7 +16,6 @@ Server::Server(int welcoming_port)
 {
     m_WelcomingSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
-    int enable = 1;
     int optval = 1;
     if (setsockopt(m_WelcomingSocket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(int)) < 0)
     {
@@ -113,23 +114,68 @@ void Server::HandleRequest(sockaddr_in clientAddress, string filepath)
 
     int packetCount = ceil(fileSize / (float)sizeof(Packet::data));
 
-    while (packetCount--)
+    uint32_t nextSeqNum = 1;
+    uint32_t sendBase = 1;
+
+    deque<Packet*> unAckedPackets;
+
+    chrono::time_point timer = chrono::system_clock::now();
+
+    do
     {
         int remainingSize = fileSize - file.tellg();
-        cout << remainingSize << endl;
 
-        Packet p;
-        p.len = min(remainingSize, (int)sizeof(p.data));
+        Packet* p = new Packet();
+        p->len = min(remainingSize, (int)sizeof(p->data));
+        p->seqno = nextSeqNum++;
 
-        file.read((char*)&p.data, p.len);
+        file.read((char*)&p->data, p->len);
 
-        sendto(reliableSocket, &p, sizeof(p), 0, (sockaddr*)&clientAddress, clientAddressLen);
+        // add probability to fail
+        sendto(reliableSocket, p, sizeof(Packet), 0, (sockaddr*)&clientAddress, clientAddressLen);
+
+        if (p->len > 0)
+            unAckedPackets.push_back(p);
+
+        chrono::time_point now = chrono::system_clock::now();
+        if (chrono::duration_cast<chrono::seconds>(now - timer) > chrono::seconds(4))
+        {
+            // handle timeout
+            cout << "timed out!" << endl;
+            cout << "send base = " << sendBase << endl;
+            Packet* p = unAckedPackets.front();
+            sendto(reliableSocket, p, sizeof(Packet), 0, (sockaddr*)&clientAddress, clientAddressLen);
+            timer = chrono::system_clock::now();
+        }
 
         AckPacket ack;
-        recvfrom(reliableSocket, &ack, sizeof(ack), 0, (sockaddr*)&clientAddress, &clientAddressLen);
-    }
+        recvfrom(reliableSocket, &ack, sizeof(ack), MSG_DONTWAIT, (sockaddr*)&clientAddress, &clientAddressLen);
+
+        if (ack.ackno != 0)
+        {
+            // ack received
+            int n = ack.ackno - sendBase;
+            while (n--)
+            {
+                Packet* p = unAckedPackets.front();
+                delete p;
+                unAckedPackets.pop_front();
+            }
+
+            sendBase = max(sendBase, ack.ackno);
+            if (nextSeqNum > sendBase)
+            {
+                // start timer
+                timer = chrono::system_clock::now();
+            }
+
+            cout << "ackno = " << ack.ackno << endl;
+            cout << "remaining packets = " << unAckedPackets.size() << endl;
+        }
+    } while (!unAckedPackets.empty());
 
     Packet endPacket;
+    endPacket.len = -1;
     sendto(reliableSocket, &endPacket, sizeof(endPacket), 0, (sockaddr*)&clientAddress, clientAddressLen);
 
     close(reliableSocket);
