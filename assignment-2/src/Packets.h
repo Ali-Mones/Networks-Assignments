@@ -1,4 +1,7 @@
+#pragma once
+
 #include <cstdint>
+#include <cstring>
 
 /* 508 bytes */
 struct Packet

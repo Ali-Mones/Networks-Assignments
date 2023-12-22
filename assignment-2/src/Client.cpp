@@ -49,7 +49,7 @@ void Client::ReceiveFile()
         recvfrom(m_Socket, &p, sizeof(p), 0, (sockaddr*)&m_ReliableServerAddress, &reliableServerAddressLen);
         // ackno++;
 
-        if (p.len == -1)
+        if (p.len == 65535)
             break;
 
         if (p.len != 0)
@@ -62,7 +62,7 @@ void Client::ReceiveFile()
         if (chrono::duration_cast<chrono::seconds>(now - timer) > chrono::seconds(6))
         {
             timer = now;
-            ackno++;
+            ackno += p.len;
             AckPacket ack;
             ack.ackno = ackno;
             sendto(m_Socket, &ack, sizeof(ack), 0, (sockaddr*)&m_ReliableServerAddress, reliableServerAddressLen);
