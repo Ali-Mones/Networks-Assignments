@@ -1,0 +1,4 @@
+client_post /index.html 127.0.0.1 8080
+client_post /hello.txt 127.0.0.1 8080
+client_post /input.txt 127.0.0.1 8080
+client_post /Capture.png 127.0.0.1 8080
