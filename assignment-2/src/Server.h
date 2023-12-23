@@ -8,7 +8,7 @@
 class Server
 {
 public:
-    Server(int welcoming_port);
+    Server(int welcoming_port, float plp);
     ~Server();
     void Run();
 private:
@@ -19,4 +19,5 @@ private:
     bool m_Waiting;
     std::mutex m_WaitingMutex;
     std::thread* m_WaitingThread = nullptr;
+    float m_PLP;
 };

@@ -13,10 +13,9 @@
 #include "TcpConnection.h"
 using namespace std;
 
-Server::Server(int welcoming_port)
+Server::Server(int welcoming_port, float plp)
+    : m_WelcomingSocket(socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)), m_PLP(plp)
 {
-    m_WelcomingSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
     int optval = 1;
     if (setsockopt(m_WelcomingSocket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(int)) < 0)
     {
@@ -71,7 +70,7 @@ void Server::Run()
         {
             // child process here
             string filepath = (char*)(&buffer);
-            TcpConnection connection(clientAddress, filepath);
+            TcpConnection connection(clientAddress, filepath, m_PLP);
             connection.HandleConnection();
             cout << "Child exiting" << endl;
             exit(0);
