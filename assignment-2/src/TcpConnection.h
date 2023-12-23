@@ -20,7 +20,7 @@ enum class TcpCongestionState
 class TcpConnection
 {
 public:
-    TcpConnection(sockaddr_in clientAddress, string filepath);
+    TcpConnection(sockaddr_in clientAddress, string filepath, float plp);
     void HandleConnection();
 private:
     void HandleNewAck();
@@ -34,6 +34,8 @@ private:
     int m_Socket;
     sockaddr_in m_ClientAddress;
     socklen_t m_ClientAddressLen;
+
+    float m_PLP;
 
     ifstream m_File;
     size_t m_FileSize;

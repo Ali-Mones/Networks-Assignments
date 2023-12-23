@@ -2,6 +2,6 @@
 
 int main()
 {
-    Server server(8082);
+    Server server(8082, 0.3f);
     server.Run();
 }

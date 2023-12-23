@@ -3,38 +3,40 @@
 #include <iostream>
 #include <unistd.h>
 #include <chrono>
+#include <random>
 
 #include "Packets.h"
 
 using namespace std;
 
-TcpConnection::TcpConnection(sockaddr_in clientAddress, string filepath)
+TcpConnection::TcpConnection(sockaddr_in clientAddress, string filepath, float plp)
     : m_ClientAddress(clientAddress), m_ClientAddressLen(sizeof(m_ClientAddress)),
-    m_File(ifstream("files/" + filepath, ios::ate)), m_FileSize(m_File.tellg()),
+    m_PLP(plp),
+    m_File(ifstream(filepath, ios::ate)), m_FileSize(m_File.tellg()),
     m_Socket(socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)),
     m_SendBase(0), m_NextSeqNo(0),
     m_State(TcpCongestionState::SlowStart),
     m_Mss(sizeof(Packet::data)), m_Cwnd(m_Mss), m_DuplicateAckCount(0), m_Ssthresh(64 * 1024)
 {
+    srand(time(0));
     m_File.seekg(0);
 }
 
 void TcpConnection::HandleConnection()
 {
-
     // send first packet
     uint32_t remainingSize = m_FileSize - m_File.tellg();
 
     Packet* p = new Packet();
-    p->len = min(remainingSize, m_Cwnd + m_SendBase - m_NextSeqNo);
+    p->len = min(remainingSize, min(m_Cwnd + m_SendBase - m_NextSeqNo, (uint32_t)sizeof(Packet::data)));
     p->seqno = 0;
 
     m_UnAckedPackets.push_back(p);
 
     m_File.read((char*)&p->data, p->len);
 
-    // add probability to fail
-    sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
+    if ((float)rand() / RAND_MAX > m_PLP)
+        sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
 
     m_NextSeqNo += p->len;
 
@@ -47,43 +49,46 @@ void TcpConnection::HandleConnection()
 
         if (ack.ackno != 0)
         {
+            cout << "Ack received! - " << ack.ackno << endl;
+
             // ack received
-            Packet* p = m_UnAckedPackets.front();
-            while (p && p->seqno < ack.ackno)
+            Packet* x = m_UnAckedPackets.front();
+
+            while (x && x->seqno < ack.ackno)
             {
-                delete p;
+                delete x;
+
                 m_UnAckedPackets.pop_front();
-                p = m_UnAckedPackets.front();
+
+                if (m_UnAckedPackets.size() == 0)
+                    break;
+
+                x = m_UnAckedPackets.front();
             }
 
-            cout << "ackno = " << ack.ackno << endl;
 
-            if (ack.ackno > m_SendBase)
+            uint32_t oldSendBase = m_SendBase;
+            m_SendBase = max(m_SendBase, ack.ackno);
+
+            if (ack.ackno > oldSendBase)
                 HandleNewAck();
             else
                 HandleDuplicateAck();
 
-            m_SendBase = max(m_SendBase, ack.ackno);
             if (m_NextSeqNo > m_SendBase)
             {
                 // start timer
                 timer = chrono::system_clock::now();
             }
-
-            cout << "ackno = " << ack.ackno << endl;
-            cout << "remaining packets = " << m_UnAckedPackets.size() << endl;
         }
 
         chrono::time_point now = chrono::system_clock::now();
-        if (chrono::duration_cast<chrono::seconds>(now - timer) > chrono::seconds(4))
+        if (chrono::duration_cast<chrono::milliseconds>(now - timer) > chrono::milliseconds(10))
         {
             // handle timeout
             cout << "timed out!" << endl;
-            cout << "send base = " << m_SendBase << endl;
 
             HandleTimeout();
-            // Packet* p = m_UnAckedPackets.front();
-            // sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
             timer = chrono::system_clock::now();
         }
     }
@@ -125,11 +130,13 @@ void TcpConnection::HandleNewAck()
         m_Cwnd = m_Ssthresh;
         m_DuplicateAckCount = 0;
         m_State = TcpCongestionState::CongestionAvoidance;
+        TransmitNewPacket();
     }
 }
 
 void TcpConnection::HandleDuplicateAck()
 {
+    cout << "Handling duplicate ack!" << endl;
     if (m_State == TcpCongestionState::SlowStart || m_State == TcpCongestionState::CongestionAvoidance)
     {
         m_DuplicateAckCount++;
@@ -141,6 +148,8 @@ void TcpConnection::HandleDuplicateAck()
 
             // retransmit missing segment
             RetransmitMissingPacket();
+
+            m_State = TcpCongestionState::FastRecovery;
         }
     }
     else if (m_State == TcpCongestionState::FastRecovery)
@@ -166,31 +175,43 @@ void TcpConnection::HandleTimeout()
 
 void TcpConnection::TransmitNewPacket()
 {
-    cout << "Sending new packet" << endl;
+    cout << "Sending new packet!" << endl;
 
-    uint32_t remainingSize = m_FileSize - m_File.tellg();
+    while (true)
+    {
+        uint32_t remainingSize = m_FileSize - m_File.tellg();
+        cout << remainingSize << " bytes remaining!" << endl;
 
-    if (remainingSize == 0)
-        return;
+        if (remainingSize == 0)
+            return;
 
-    Packet* p = new Packet();
-    p->len = min(remainingSize, m_Cwnd + m_SendBase - m_NextSeqNo);
-    p->seqno = m_NextSeqNo;
+        Packet* p = new Packet();
+        p->len = min(remainingSize, min(m_Cwnd + m_SendBase - m_NextSeqNo, (uint32_t)sizeof(Packet::data)));
+        p->seqno = m_NextSeqNo;
 
-    m_UnAckedPackets.push_back(p);
+        if (p->len == 0 || m_SendBase + m_Cwnd < m_NextSeqNo + p->len)
+        {
+            delete p;
+            break;
+        }
 
-    m_File.read((char*)&p->data, p->len);
+        m_UnAckedPackets.push_back(p);
+        
+        m_File.read((char*)&p->data, p->len);
+        // cout << "Sending " << p->data << endl;
 
-    // add probability to fail
-    sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
+        if ((float)rand() / RAND_MAX > m_PLP)
+            sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
 
-    m_NextSeqNo += p->len;
+        m_NextSeqNo += p->len;
+    }
 }
 
 void TcpConnection::RetransmitMissingPacket()
 {
-    cout << "Retransmitting packet!" << endl;
-
+    cout << "Retransmitting missing packet!" << endl;
     Packet* p = m_UnAckedPackets.front();
-    sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
+
+    if ((float)rand() / RAND_MAX > m_PLP)
+        sendto(m_Socket, p, sizeof(Packet), 0, (sockaddr*)&m_ClientAddress, m_ClientAddressLen);
 }
